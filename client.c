@@ -11,7 +11,7 @@
 
 #define MAXHOSTNAME 80
 #define BUFSIZE 1024
-#define PORT 8080  // Hardcoded
+#define PORT 3826  // Hardcoded
 
 char buf[BUFSIZE];  // Input buffer
 int sd;  // Socket descriptor
