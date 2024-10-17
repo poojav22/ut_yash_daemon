@@ -1,173 +1,127 @@
+
 #include <stdio.h>
-/* socket(), bind(), recv, send */
 #include <sys/types.h>
-#include <sys/socket.h> /* sockaddr_in */
-#include <netinet/in.h> /* inet_addr() */
-#include <arpa/inet.h> /* struct hostent */
-#include <string.h> /* memset() */
-#include <unistd.h> /* close() */
-#include <stdlib.h> /* exit() */
-#include <signal.h> /* Signal handling */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <signal.h>
 
 #define MAXHOSTNAME 80
 #define BUFSIZE 1024
-#define PORT 8080  // Hardcoded
 
-char buf[BUFSIZE];  // Input buffer
-int sd;  // Socket descriptor
+char buf[BUFSIZE];
+char rbuf[BUFSIZE];
+void GetUserInput();
+void cleanup(char *buf);
 
-void handle_signal(int sig);  // Signal handler function
-void GetUserInput();  // Function to handle user input and communication with server
 
-int main(int argc, char **argv) {
+int rc, cc;
+int   sd;
+
+int main(int argc, char **argv ) {
+    int childpid;
     struct sockaddr_in server;
+    struct sockaddr_in client;
+    struct hostent *hp, *gethostbyname();
     struct sockaddr_in from;
-    socklen_t fromlen;
-    char ThisHost[MAXHOSTNAME];
+    struct sockaddr_in addr;
+    int fromlen;
+    int length;
+    char ThisHost[80];
 
-    // Set up signal handlers for Ctrl+C and Ctrl+Z
-    signal(SIGINT, handle_signal);  // Handle Ctrl+C (SIGINT)
-    signal(SIGTSTP, handle_signal); // Handle Ctrl+Z (SIGTSTP)
+    strcpy(ThisHost,"localhost");
 
-    // Get host name for logging
-    gethostname(ThisHost, MAXHOSTNAME); 
     printf("----TCP/Client running at host NAME: %s\n", ThisHost);
+    if  ( (hp = gethostbyname(ThisHost)) == NULL ) {
+	fprintf(stderr, "Can't find host %s\n", argv[1]);
+	exit(-1);
+    }
+    bcopy ( hp->h_addr, &(server.sin_addr), hp->h_length);
+    printf("    (TCP/Client INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
 
-    // Create socket
-    sd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sd < 0) {
-        perror("opening stream socket");
-        exit(-1);
+    if  ( (hp = gethostbyname(argv[1])) == NULL ) {
+	addr.sin_addr.s_addr = inet_addr(argv[1]);
+	if ((hp = gethostbyaddr((char *) &addr.sin_addr.s_addr,
+				sizeof(addr.sin_addr.s_addr),AF_INET)) == NULL) {
+	    fprintf(stderr, "Can't find host %s\n", argv[1]);
+	    exit(-1);
+	}
+    }
+    printf("----TCP/Server running at host NAME: %s\n", hp->h_name);
+    bcopy ( hp->h_addr, &(server.sin_addr), hp->h_length);
+    printf("    (TCP/Server INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
+
+    server.sin_family = AF_INET; 
+    server.sin_port = htons(atoi(argv[2]));
+    sd = socket (AF_INET,SOCK_STREAM,0); 
+
+    if (sd<0) {
+	perror("opening stream socket");
+	exit(-1);
     }
 
-    // Set up server connection
-    server.sin_family = AF_INET;
-    server.sin_port = htons(PORT);
-    server.sin_addr.s_addr = inet_addr(argv[1]);  // IP provided by client
-
-    if (server.sin_addr.s_addr == INADDR_NONE) {
-        fprintf(stderr, "Invalid IP address: %s\n", argv[1]);
-        exit(-1);
+    if ( connect(sd, (struct sockaddr *) &server, sizeof(server)) < 0 ) {
+	close(sd);
+	perror("connecting stream socket");
+	exit(0);
     }
-
-    // Connect to the server
-    if (connect(sd, (struct sockaddr *)&server, sizeof(server)) < 0) {
-        perror("connecting stream socket");
-        close(sd);
-        exit(-1);
-    }
-
     fromlen = sizeof(from);
-    if (getpeername(sd, (struct sockaddr *)&from, &fromlen) < 0) {
-        perror("couldn't get peername");
-        close(sd);
-        exit(-1);
+    if (getpeername(sd,(struct sockaddr *)&from,&fromlen)<0){
+	perror("could't get peername\n");
+	exit(1);
+    }
+    printf("Connected to TCPServer1: ");
+    printf("%s:%d\n", inet_ntoa(from.sin_addr),
+	   ntohs(from.sin_port));
+    if ((hp = gethostbyaddr((char *) &from.sin_addr.s_addr,
+			    sizeof(from.sin_addr.s_addr),AF_INET)) == NULL)
+	fprintf(stderr, "Can't find host %s\n", inet_ntoa(from.sin_addr));
+    else
+	printf("(Name is : %s)\n", hp->h_name);
+    childpid = fork();
+    if (childpid == 0) {
+	GetUserInput();
     }
 
-    printf("Connected to TCPserver at IP: %s on port %d\n", inet_ntoa(from.sin_addr), ntohs(from.sin_port));
-
-    // Call function to handle communication with the server
-    GetUserInput();
-
-    close(sd);  // Close socket when done
-    return 0;
+    for(;;) {
+	cleanup(rbuf);
+	if( (rc=recv(sd, rbuf, sizeof(buf), 0)) < 0){
+	    perror("receiving stream  message");
+	    exit(-1);
+	}
+	if (rc > 0){
+	    rbuf[rc]='\0';
+	    printf("Received: %s\n", rbuf);
+	}else {
+	    printf("Disconnected..\n");
+	    close (sd);
+	    exit(0);
+	}
+  }
 }
 
-// Signal handler function
-void handle_signal(int sig) {
-    if (sig == SIGINT) {  // Ctrl+C
-        printf("\nReceived Ctrl+C, closing connection and exiting...\n");
-        close(sd);  // Close the socket
-        exit(0);  // Exit the client
-    } else if (sig == SIGTSTP) {  // Ctrl+Z
-        printf("\nReceived Ctrl+Z, suspending client...\n");
-        raise(SIGSTOP);  // Suspend the process
+void cleanup(char *buf)
+{
+    int i;
+    for(i=0; i<BUFSIZE; i++) buf[i]='\0';
+}
+
+void GetUserInput()
+{
+    for(;;) {
+	printf("\nEnter command:\n");
+	cleanup(buf);
+	rc=read(0,buf, sizeof(buf));
+	if (rc == 0) break;
+	if (send(sd, buf, rc, 0) <0 )
+	    perror("sending stream message");
     }
+    printf ("EOF... exit\n");
+    close(sd);
+    kill(getppid(), 9);
+    exit (0);
 }
-
-
-void GetUserInput() {
-    while (1) {
-        // Step 1: Receive the prompt from the server first
-        int rc = recv(sd, buf, BUFSIZE, 0);
-        if (rc < 0) {
-            perror("Error receiving prompt from server");
-            break;
-        } else if (rc == 0) {
-            printf("Server closed connection.\n");
-            close(sd);
-            exit(0);
-        } else {
-            buf[rc] = '\0';  // Null-terminate the received prompt
-            printf("%s", buf);  // Display the server's prompt
-        }
-
-        // Step 2: Ask the user for input after showing the prompt
-        printf("Enter a command or plain text: ");
-        fgets(buf, BUFSIZE, stdin);  // Get user input
-
-        // Step 3: Send the input to the server
-        if (send(sd, buf, strlen(buf), 0) < 0) {
-            perror("Error sending input to server");
-            break;
-        }
-
-        // Step 4: Receive the server's response
-        rc = recv(sd, buf, BUFSIZE, 0);
-        if (rc < 0) {
-            perror("Error receiving response from server");
-            break;
-        } else if (rc == 0) {
-            printf("Server closed connection.\n");
-            close(sd);
-            exit(0);
-        } else {
-            buf[rc] = '\0';  // Null-terminate the received string
-            printf("Server response: %s\n", buf);  // Display the server's response
-        }
-    }
-}
-
-
-// void GetUserInput() {
-//     while (1) {
-//         // Step 1: Receive the prompt from the server
-//         int rc = recv(sd, buf, BUFSIZE - 1, 0);  // Ensure enough space for null-terminator
-//         if (rc < 0) {
-//             perror("Error receiving prompt from server");
-//             break;
-//         } else if (rc == 0) {
-//             printf("Server closed connection.\n");
-//             close(sd);
-//             exit(0);
-//         } else {
-//             buf[rc] = '\0';  // Null-terminate the received string
-//             printf("%s", buf);  // Display the server's prompt
-//         }
-
-//         // Step 2: Ask the user for input
-//         printf("Enter a command (CMD <command>) or plain text: ");
-//         fgets(buf, BUFSIZE, stdin);  // Read user input
-
-//         // Step 3: Send the input to the server
-//         if (send(sd, buf, strlen(buf), 0) < 0) {
-//             perror("Error sending message to server");
-//             break;
-//         }
-
-//         // Step 4: Receive the server's response after sending the message
-//         rc = recv(sd, buf, BUFSIZE - 1, 0);  // Ensure enough space for null-terminator
-//         if (rc < 0) {
-//             perror("Error receiving response from server");
-//             break;
-//         } else if (rc == 0) {
-//             printf("Server closed connection.\n");
-//             close(sd);
-//             exit(0);
-//         } else {
-//             buf[rc] = '\0';  // Null-terminate the received string
-//             printf("Server response: %s\n", buf);  // Display the response
-//         }
-//     }
-// }
-
