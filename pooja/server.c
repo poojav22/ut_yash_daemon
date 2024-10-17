@@ -127,6 +127,7 @@ void run_yash(int psd, char *cmd) {
         int saved_stdout = dup(1);
         dup2(psd, STDOUT_FILENO);
         process_cmd(cmd);
+        printf("# ");
         fflush(stdout);
         dup2(saved_stdout, STDOUT_FILENO);
 }
@@ -184,7 +185,8 @@ void EchoServe(void *input) {
 	    printf("(Name is : %s)\n", hp->h_name);
 	    printf("Disconnected..\n");
 	    close (client.sock);
-	    exit(0);
+	    //exit(0);
+        pthread_exit(NULL);
     }
     }
 }
