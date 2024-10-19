@@ -532,7 +532,7 @@ void sig_handler(int signo) {
 */
 
 int main(int argc, char **argv) {
-    //daemonize();  // Daemonize the process
+    daemonize();  // Daemonize the process
 
     // Lock the PID file to ensure only one instance is running
     if (lock_pid_file() != 0) {
