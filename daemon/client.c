@@ -82,6 +82,8 @@ int main(int argc, char **argv ) {
 	fprintf(stderr, "Can't find host %s\n", inet_ntoa(from.sin_addr));
     else
 	printf("(Name is : %s)\n", hp->h_name);
+    printf("# ");
+    fflush(stdout);
     childpid = fork();
     if (childpid == 0) {
 	GetUserInput();
@@ -97,6 +99,7 @@ int main(int argc, char **argv ) {
 	    rbuf[rc]='\0';
 	    //printf("Received: %s\n", rbuf);
         printf("%s", rbuf);
+        fflush(stdout);
 	}else {
 	    printf("Disconnected..\n");
 	    close (sd);
@@ -113,7 +116,7 @@ void cleanup(char *buf)
 
 void GetUserInput()
 {
-    printf("# ");
+    //printf("# ");
     for(;;) {
 	//printf("\nEnter command:\n");
 	cleanup(buf);
