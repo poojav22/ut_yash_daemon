@@ -95,7 +95,8 @@ int main(int argc, char **argv ) {
 	}
 	if (rc > 0){
 	    rbuf[rc]='\0';
-	    printf("Received: %s\n", rbuf);
+	    //printf("Received: %s\n", rbuf);
+        printf("%s", rbuf);
 	}else {
 	    printf("Disconnected..\n");
 	    close (sd);
@@ -112,8 +113,9 @@ void cleanup(char *buf)
 
 void GetUserInput()
 {
+    printf("# ");
     for(;;) {
-	printf("\nEnter command:\n");
+	//printf("\nEnter command:\n");
 	cleanup(buf);
 	rc=read(0,buf, sizeof(buf));
 	if (rc == 0) break;
