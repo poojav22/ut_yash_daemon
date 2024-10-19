@@ -24,16 +24,26 @@
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 FILE *logFile;
 
+typedef struct job
+{
+  char *job_name;
+  pid_t pgid;
+  int index;
+  char* status;
+} job;
+
 struct ClInfo {
     int id;
     int sock;
     struct sockaddr_in from;
+    job *job_list;
+    int job_count;
 };
 
 void reusePort(int sock);
 void *EchoServe(void *input);
-void process_cmd(char* buf);
-void run_yash(int psd, char *cmd);
+void process_cmd(char* buf, struct ClInfo *tinfo);
+void run_yash(int psd, char *cmd, struct ClInfo *tinfo);
 void daemonize();
 int lock_pid_file();
 void update_log_file(struct sockaddr_in from, char *cmd);
@@ -44,16 +54,8 @@ int fd1, fd2;
 int status;
 int pfd[2], lpid, rpid, wpid;
 int wait_cnt = 0;
-int count = 0;
-typedef struct job
-{
-  char *job_name;
-  pid_t pgid;
-  int index;
-  char* status;
-} job;
+//int count = 0;
 
-job *job_list;
 
 char** str_handler(char* cmd, char* delimiter)
 {
@@ -175,33 +177,33 @@ void execute_cmd(char **tokens) {
   execvp(tokens[0], tokens);
 }
 
-void print_job (job *job_list)
+void print_job (struct ClInfo *tinfo)
 {
-  for (int i=1; i<count; i++) {
-    printf ("[%d]-    %s    %s\n", job_list[i].index, job_list[i].status, job_list[i].job_name);
+  for (int i=1; i<tinfo->job_count; i++) {
+    printf ("[%d]-    %s    %s\n", tinfo->job_list[i].index, tinfo->job_list[i].status, tinfo->job_list[i].job_name);
   }
-  if (count != 0) {
-  printf ("[%d]+    %s    %s\n", job_list[count].index, job_list[count].status, job_list[count].job_name);
+  if (tinfo->job_count != 0) {
+  printf ("[%d]+    %s    %s\n", tinfo->job_list[tinfo->job_count].index, tinfo->job_list[tinfo->job_count].status, tinfo->job_list[tinfo->job_count].job_name);
   }
 }
 
-void add_to_joblist(char* cmd, pid_t sid) {
-count++;
+void add_to_joblist(char* cmd, pid_t sid, struct ClInfo *tinfo) {
+tinfo->job_count++;
 //printf("Adding job %d to index %d\n", sid, count);
-job_list[count].job_name = malloc(strlen(cmd) + 1);
-strcpy(job_list[count].job_name, cmd);
-job_list[count].pgid = sid;
-job_list[count].index = count;
-job_list[count].status = "Stopped";
+tinfo->job_list[tinfo->job_count].job_name = malloc(strlen(cmd) + 1);
+strcpy(tinfo->job_list[tinfo->job_count].job_name, cmd);
+tinfo->job_list[tinfo->job_count].pgid = sid;
+tinfo->job_list[tinfo->job_count].index = tinfo->job_count;
+tinfo->job_list[tinfo->job_count].status = "Stopped";
 
 }
 
 
-int update_jobstatus(pid_t pid, char *stat) {
+int update_jobstatus(pid_t pid, char *stat,struct ClInfo *tinfo) {
     int i = 0;
     int found = 0;
-  for (i=1; i<=count; i++) {
-    if (job_list[i].pgid == pid) {
+  for (i=1; i<=tinfo->job_count; i++) {
+    if (tinfo->job_list[i].pgid == pid) {
         //printf("Job found in job list %d total %d", i, count );
       found = 1;
       break;
@@ -209,27 +211,26 @@ int update_jobstatus(pid_t pid, char *stat) {
   }
   if (found == 1) {
     //printf("Updating job %d %s to %s\n", i, job_list[i].status, stat);
-    job_list[i].status = stat;
+    tinfo->job_list[i].status = stat;
     return i;
   } else {
     return -1;
   }
-    
 }
 
-void put_job_in_background (char *cmd, char **tokens, pid_t chid1)
+void put_job_in_background (char *cmd, char **tokens, pid_t chid1, struct ClInfo *tinfo)
 {
-  add_to_joblist(cmd, chid1);
+  add_to_joblist(cmd, chid1, tinfo);
     if (kill (-chid1, SIGCONT) < 0)
       perror ("kill (SIGCONT)");
-    update_jobstatus(chid1, "Running");
+    update_jobstatus(chid1, "Running", tinfo);
 }
 
-void bg_cmd_process1() {
-    if (kill (-job_list[count].pgid, SIGCONT) < 0)
+void bg_cmd_process1(struct ClInfo *tinfo) {
+    if (kill (-tinfo->job_list[tinfo->job_count].pgid, SIGCONT) < 0)
       perror ("kill (SIGCONT)");
     //printf("Job %d running in background!!\n", job_list[count].pgid);
-    update_jobstatus(job_list[count].pgid, "Running");
+    update_jobstatus(tinfo->job_list[tinfo->job_count].pgid, "Running", tinfo);
 }
 
 void check_bg_process(char **tokens, pid_t chid1){
@@ -244,62 +245,62 @@ void check_bg_process(char **tokens, pid_t chid1){
 
 }
 
-void fg_cmd_process1() {
+void fg_cmd_process1(struct ClInfo *tinfo) {
 
   //printf("Bringing %d job to foreground", job_list[count].pgid);
-  tcsetpgrp (STDIN_FILENO, job_list[count].pgid);
-    if (kill (-job_list[count].pgid, SIGCONT) < 0)
+  tcsetpgrp (STDIN_FILENO, tinfo->job_list[tinfo->job_count].pgid);
+    if (kill (-tinfo->job_list[tinfo->job_count].pgid, SIGCONT) < 0)
       perror ("kill (SIGCONT)");
     //printf("Job %d running in foreground!!\n", job_list[count].pgid);
 }
 
-void update_job_list() {
+void update_job_list(struct ClInfo *tinfo) {
     int i;
-    for (i=1; i<=count; i++) {
-      if (strcmp(job_list[i].status, "Done") ==0) {
+    for (i=1; i<=tinfo->job_count; i++) {
+      if (strcmp(tinfo->job_list[i].status, "Done") ==0) {
         //printf("removing done job from list %d\n", i);
         break;
     }
     }
-    if(i <=count){
-        for(int x=i; x<=count; x++) {
+    if(i <=tinfo->job_count){
+        for(int x=i; x<=tinfo->job_count; x++) {
           //printf("Updating element %d total %d\n", x, count);
-          job_list[x] = job_list[x+1];
+          tinfo->job_list[x] = tinfo->job_list[x+1];
         }
-        count--;
+        tinfo->job_count--;
     }
 }
 
-void process_wait_status(int status, char *cmd, pid_t wpid) {
+void process_wait_status(int status, char *cmd, pid_t wpid, struct ClInfo *tinfo) {
         if (WIFEXITED(status)) {
         //printf("child %d exited, status=%d\n", wpid, WEXITSTATUS(status));
-        int id = update_jobstatus(wpid, "Done");
+        int id = update_jobstatus(wpid, "Done", tinfo);
         if (id>0) {
-        printf ("[%d]   %s    %s\n", job_list[id].index, job_list[id].status, job_list[id].job_name);
+        printf ("[%d]   %s    %s\n", tinfo->job_list[id].index, tinfo->job_list[id].status, tinfo->job_list[id].job_name);
         wait_cnt++;
         }
-        update_job_list();
+        update_job_list(tinfo);
         //printf("Job update done");
       } else if (WIFSIGNALED(status)) {
         //printf("child %d killed by signal %d\n", wpid, WTERMSIG(status));
       } else if (WIFSTOPPED(status)) {
         //printf("%d stopped by signal %d\n", wpid, WSTOPSIG(status));
         //printf("Adding %s to job list. Count: %d\n", cmd, count);
-        add_to_joblist(cmd, wpid);
+        add_to_joblist(cmd, wpid, tinfo);
       } else if (WIFCONTINUED(status)) {
         //printf("Continuing %d\n",wpid);
-        update_jobstatus(wpid, "Running");
+        update_jobstatus(wpid, "Running", tinfo);
         kill(wpid,SIGCONT);
       }
 }
 
-void fg_cmd_process(pid_t sid) {
-    if (count <= 0) {
+void fg_cmd_process(pid_t sid, struct ClInfo *tinfo) {
+    if (tinfo->job_count <= 0) {
         printf("No jobs to bring to foreground.\n");
         return;
     }
 
-    struct job fg_job = job_list[count];
+    struct job fg_job = tinfo->job_list[tinfo->job_count];
     //printf("Bringing job %d to foreground\n", fg_job.pgid);
     //tcsetpgrp(STDOUT_FILENO, fg_job.pgid);
 
@@ -318,30 +319,30 @@ void fg_cmd_process(pid_t sid) {
     int id;
     if (WIFEXITED(status)) {
         //printf("Job %d exited with status %d\n", fg_job.pgid, WEXITSTATUS(status));
-        id = update_jobstatus(fg_job.pgid, "Done");
+        id = update_jobstatus(fg_job.pgid, "Done", tinfo);
         if (id>0) {
-        printf ("[%d]   %s    %s\n", job_list[id].index, job_list[id].status, job_list[id].job_name);
+        printf ("[%d]   %s    %s\n", tinfo->job_list[id].index, tinfo->job_list[id].status, tinfo->job_list[id].job_name);
         }
     } else if (WIFSIGNALED(status)) {
         //printf("Job %d killed by signal %d\n", fg_job.pgid, WTERMSIG(status));
-        id = update_jobstatus(fg_job.pgid, "Done");
+        id = update_jobstatus(fg_job.pgid, "Done", tinfo);
         if (id>0) {
-        printf ("[%d]   %s    %s\n", job_list[id].index, job_list[id].status, job_list[id].job_name);
+        printf ("[%d]   %s    %s\n", tinfo->job_list[id].index, tinfo->job_list[id].status, tinfo->job_list[id].job_name);
         }
     } else if (WIFSTOPPED(status)) {
         //printf("Job %d stopped by signal %d\n", fg_job.pgid, WSTOPSIG(status));
-        update_jobstatus(fg_job.pgid, "Stopped");
+        update_jobstatus(fg_job.pgid, "Stopped", tinfo);
     }
     //printf("fg cmd done");
 }
 
-void bg_cmd_process(pid_t sid) {
-    if (count <= 0) {
+void bg_cmd_process(pid_t sid, struct ClInfo *tinfo) {
+    if (tinfo->job_count <= 0) {
         printf("No jobs to run in background.\n");
         return;
     }
 
-    struct job bg_job = job_list[count];
+    struct job bg_job = tinfo->job_list[tinfo->job_count];
 
     //printf("Bringing job %d to background\n", bg_job.pgid);
 
@@ -349,11 +350,11 @@ void bg_cmd_process(pid_t sid) {
         perror("kill (SIGCONT)");
     } else {
         //printf("Job %d running in background\n", bg_job.pgid);
-        update_jobstatus(bg_job.pgid, "Running");
+        update_jobstatus(bg_job.pgid, "Running", tinfo);
     }
 }
 
-void process_cmd(char* cmd) {
+void process_cmd(char* cmd, struct ClInfo *tinfo) {
   int i = 0;
 int sync_pipe[2];
 char *pcmd;
@@ -394,14 +395,14 @@ pipe(pfd);
 pipe(sync_pipe);
 
 if (strcmp(pipe_cmds[0], "bg") == 0) {
-  bg_cmd_process(sid);
+  bg_cmd_process(sid, tinfo);
   pipe_cmds[0] = " ";
 
 }
 
 
 if (strcmp(pipe_cmds[0], "fg") == 0) {
-  fg_cmd_process(sid);
+  fg_cmd_process(sid, tinfo);
   //is_foreground = 1;
   pipe_cmds[0] = NULL;
 
@@ -426,7 +427,7 @@ check_input_redirection(tokens);
 
 
 if (strcmp(tokens[0], "jobs") == 0) {
-  print_job(job_list);
+  print_job(tinfo);
   exit(0);
 }
 
@@ -486,22 +487,22 @@ if (is_background == 1) {
     //if (kill (-chid1, SIGTSTP) < 0)
     //  perror ("kill (SIGTSTP)");
     //add_to_joblist(cmd, chid1);
-    add_to_joblist(cmd, chid1);
+    add_to_joblist(cmd, chid1, tinfo);
     //printf("Sending SIGCONT to %d", chid1);
     if (kill (-chid1, SIGCONT) < 0)
       perror ("kill (SIGCONT)");
-    update_jobstatus(chid1, "Running");
+    update_jobstatus(chid1, "Running", tinfo);
     is_background = 0;
 }
 
 if (is_foreground == 1) {
-  wpid = waitpid(job_list[count].pgid, &status, WUNTRACED);
-  process_wait_status(status, job_list[count].job_name, wpid);
+  wpid = waitpid(tinfo->job_list[tinfo->job_count].pgid, &status, WUNTRACED);
+  process_wait_status(status, tinfo->job_list[tinfo->job_count].job_name, wpid, tinfo);
     is_foreground = 0;
     //tcsetpgrp(STDIN_FILENO, getpgrp());
-    tcsetpgrp (1, job_list[count].pgid);
-    wpid = waitpid(job_list[count].pgid, &status, WUNTRACED | WCONTINUED);
-    process_wait_status(status, job_list[count].job_name, wpid);
+    tcsetpgrp (1, tinfo->job_list[tinfo->job_count].pgid);
+    wpid = waitpid(tinfo->job_list[tinfo->job_count].pgid, &status, WUNTRACED | WCONTINUED);
+    process_wait_status(status, tinfo->job_list[tinfo->job_count].job_name, wpid, tinfo);
     //tcsetpgrp(1, getpgrp());
     return;
 }
@@ -514,7 +515,7 @@ if (is_foreground == 1) {
         perror("waitpid");
         exit(EXIT_FAILURE);
       }
-      process_wait_status(status, cmd, wpid);
+      process_wait_status(status, cmd, wpid, tinfo);
     }
 }
 
@@ -532,7 +533,7 @@ void sig_handler(int signo) {
 */
 
 int main(int argc, char **argv) {
-    daemonize();  // Daemonize the process
+    //daemonize();  // Daemonize the process
 
     // Lock the PID file to ensure only one instance is running
     if (lock_pid_file() != 0) {
@@ -700,14 +701,14 @@ int lock_pid_file() {
     return 0;
 }
 
-void run_yash(int psd, char *cmd) {
+void run_yash(int psd, char *cmd, struct ClInfo *thread) {
     //printf("Before running yash");
     int saved_stdout = dup(STDOUT_FILENO);  // Save original stdout
     dup2(psd, STDOUT_FILENO);               // Redirect stdout to client socket
 
     //printf("trying before");
     // Execute the command using the process_cmd function
-    process_cmd(cmd);
+    process_cmd(cmd, thread);
     //printf("trying to print");
     //printf("# ");
     // Ensure output is flushed to the client
@@ -734,8 +735,8 @@ void update_log_file(struct sockaddr_in from, char *cmd) {
 
 void *EchoServe(void *input) {
     struct ClInfo client = *(struct ClInfo *)input;
-    job_list = (struct job *) malloc(MAX_CMD_SIZE * sizeof(struct job));
-    char buf[512], cmd[512];
+    client.job_list = (struct job *) malloc(MAX_CMD_SIZE * sizeof(struct job));
+    char buf[512], cmd[512], extra_buf[512];
     int rc;
 
     // Log client connection
@@ -753,10 +754,30 @@ void *EchoServe(void *input) {
         if (rc > 0) {
             buf[rc] = '\0';
             syslog(LOG_INFO, "Received: %s", buf);
-            //printf("Received %s\n", buf);
+            printf("Received %s", buf);
+            if (strcmp(buf, "wc\n") == 0 || strcmp(buf, "cat\n") == 0) {
+                //buf[strcspn(buf, "\n")] = ' ';
+                while(1) {
+                if ((rc = recv(client.sock, extra_buf, sizeof(extra_buf), 0)) < 0) {
+                    syslog(LOG_ERR, "Error receiving message");
+                    close(client.sock);
+                    pthread_exit(NULL);  // Exit thread on error
+                }
+                printf("extra buf %s", extra_buf);
+                printf("Buf here %s", buf);
+                //strncat(buf, "\"", 1);
+                if(strcmp(extra_buf, "quit\n") != 0) {
+                    extra_buf[strcspn(extra_buf, "\n")] = ' ';
+                    strncat(buf, extra_buf, strlen(extra_buf));
+                } else {
+                    //strncat(buf, "\"", 1);
+                break;
+                }
+                }
+            }
             update_log_file(client.from, buf);
             //printf("udpated log file %s\n", buf);
-            run_yash(client.sock, buf);  // Execute the command and send output to client
+            run_yash(client.sock, buf, &client);  // Execute the command and send output to client
             send(client.sock, "\n# ", 3, 0);
         } else {
             syslog(LOG_INFO, "Client disconnected");
