@@ -717,7 +717,6 @@ void run_yash(int psd, char *cmd) {
     dup2(saved_stdout, STDOUT_FILENO);
     close(saved_stdout);  // Close the duplicated descriptor
     //printf("after running yash");
-    
 }
 
 
@@ -754,9 +753,9 @@ void *EchoServe(void *input) {
         if (rc > 0) {
             buf[rc] = '\0';
             syslog(LOG_INFO, "Received: %s", buf);
-            printf("Received %s\n", buf);
+            //printf("Received %s\n", buf);
             update_log_file(client.from, buf);
-            printf("udpated log file %s\n", buf);
+            //printf("udpated log file %s\n", buf);
             run_yash(client.sock, buf);  // Execute the command and send output to client
             send(client.sock, "\n# ", 3, 0);
         } else {
