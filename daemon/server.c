@@ -18,7 +18,7 @@
 #define MAXHOSTNAME 80
 #define LOG_FILE "/tmp/server_log.txt"
 #define PID_FILE "/tmp/server.pid"
-#define PORT 6666
+#define PORT 3820
 #define NUM_CLIENTS 50
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -49,7 +49,7 @@ int lock_pid_file();
 void update_log_file(struct sockaddr_in from, char *cmd);
 static void sig_handler(int signo);
 
-pid_t chid1, chid2;
+pid_t chid1, chid2, latest_pgrp;
 int fd1, fd2;
 int status;
 int pfd[2], lpid, rpid, wpid;
@@ -409,12 +409,15 @@ if (strcmp(pipe_cmds[0], "fg") == 0) {
 }
 
 if (pipe_cmds[0] != NULL) {
+   // printf(" parent processid : %d\n", getpid());
   wait_cnt ++;
   //printf("Processing command: %s\n", pipe_cmds[0]);
 chid1 = fork();
 
 if (chid1 == 0) {
   chid1 = getpid();
+  latest_pgrp = chid1;
+  //printf("Latest pgrp chld %d", latest_pgrp);
   //printf(" child process1: %d\n", chid1);
 //setsid();
 setpgid(0,0);
@@ -464,6 +467,8 @@ if (pipe_cmds[1] != NULL) {
     }
 
 }
+latest_pgrp = chid1;
+//printf("Latest pgrp %d", latest_pgrp);
 //Parent
  close(sync_pipe[1]); // Close write end of the pipe
     char buf;
@@ -533,7 +538,7 @@ void sig_handler(int signo) {
 */
 
 int main(int argc, char **argv) {
-    //daemonize();  // Daemonize the process
+    daemonize();  // Daemonize the process
 
     // Lock the PID file to ensure only one instance is running
     if (lock_pid_file() != 0) {
@@ -547,7 +552,7 @@ int main(int argc, char **argv) {
     struct sockaddr_in server, from;
     socklen_t fromlen;
     struct ClInfo client;
-    pthread_t th[NUM_CLIENTS];
+    pthread_t th[NUM_CLIENTS], yash[50];
     int i = 0;
 
     syslog(LOG_INFO, "Starting server daemon");
@@ -728,7 +733,7 @@ void update_log_file(struct sockaddr_in from, char *cmd) {
     strftime(time_now, sizeof(time_now), "%b %d %H:%M:%S", tm);
 
     pthread_mutex_lock(&lock);  // Ensure thread-safe log access
-    fprintf(logFile, "%s yashd[%s:%d]: %s\n", time_now, inet_ntoa(from.sin_addr), ntohs(from.sin_port), cmd);
+    fprintf(logFile, "%s yashd[%s:%d]: %s", time_now, inet_ntoa(from.sin_addr), ntohs(from.sin_port), cmd);
     fflush(logFile);  // Ensure the log is written to disk
     pthread_mutex_unlock(&lock);  // Release lock
 }
@@ -736,7 +741,7 @@ void update_log_file(struct sockaddr_in from, char *cmd) {
 void *EchoServe(void *input) {
     struct ClInfo client = *(struct ClInfo *)input;
     client.job_list = (struct job *) malloc(MAX_CMD_SIZE * sizeof(struct job));
-    char buf[512], cmd[512], extra_buf[512];
+    char buf[512], cmd[512], extra_buf[512], new_buf[512], substr[512];
     int rc;
 
     // Log client connection
@@ -754,31 +759,61 @@ void *EchoServe(void *input) {
         if (rc > 0) {
             buf[rc] = '\0';
             syslog(LOG_INFO, "Received: %s", buf);
-            printf("Received %s", buf);
-            if (strcmp(buf, "wc\n") == 0 || strcmp(buf, "cat\n") == 0) {
-                //buf[strcspn(buf, "\n")] = ' ';
+            //printf("Received %s", buf);
+            if (strncmp(buf, "CTL ", 4) == 0) {
+                // Handle control signals
+                char sig = buf[4];  // Get the control signal (e.g., 'C' for SIGINT, 'Z' for SIGTSTP)
+                //printf("Signal here is %c", sig);
+                if (sig == 'c') {
+                    syslog(LOG_INFO, "Received SIGINT (Ctrl+C) from client");
+                    //printf("Killing pgrp %d", latest_pgrp);
+                    kill(-latest_pgrp, SIGINT);
+                    break;
+                } else if (sig == 'z') {
+                    syslog(LOG_INFO, "Received SIGTSTP (Ctrl+Z) from client");
+                    //printf("Killing pgrp %d", latest_pgrp);
+                    kill(-latest_pgrp, SIGTSTP);  // Send SIGTSTP to the process group
+                    break;
+                } else {
+                    syslog(LOG_ERR, "Unknown control signal: %c", sig);
+                }
+                break;
+            }
+            if (strcmp(buf, "wc\n") == 0 || strncmp(buf, "cat >", 5) == 0) {
+                buf[strcspn(buf, "\n")] = ' ';
+                FILE *tmpfile;
+                char *tmp_name = "/tmp/tmp_file.txt";
+                tmpfile = fopen(tmp_name, "w");
                 while(1) {
                 if ((rc = recv(client.sock, extra_buf, sizeof(extra_buf), 0)) < 0) {
                     syslog(LOG_ERR, "Error receiving message");
                     close(client.sock);
                     pthread_exit(NULL);  // Exit thread on error
                 }
-                printf("extra buf %s", extra_buf);
-                printf("Buf here %s", buf);
-                //strncat(buf, "\"", 1);
                 if(strcmp(extra_buf, "quit\n") != 0) {
-                    extra_buf[strcspn(extra_buf, "\n")] = ' ';
-                    strncat(buf, extra_buf, strlen(extra_buf));
+                    fprintf(tmpfile, "%s", extra_buf);
                 } else {
-                    //strncat(buf, "\"", 1);
+                    fclose(tmpfile);
+                    if (strcmp(buf, "wc ") == 0) {
+                        strncat(buf, tmp_name, strlen(tmp_name));
+                    }
+                    if (strncmp(buf, "cat >", 5) == 0) {
+                        strncpy(substr,buf+3,strlen(buf)-3);
+                        strcat(new_buf, "cat /tmp/tmp_file.txt");
+                        strcat(new_buf, substr);
+                        strcpy(buf, new_buf);
+                    }
                 break;
                 }
                 }
             }
             update_log_file(client.from, buf);
             //printf("udpated log file %s\n", buf);
+            //int try_chid = fork();
+            //if (try_chid == 0) {
             run_yash(client.sock, buf, &client);  // Execute the command and send output to client
             send(client.sock, "\n# ", 3, 0);
+            //}
         } else {
             syslog(LOG_INFO, "Client disconnected");
             close(client.sock);

@@ -12,6 +12,7 @@
 
 #define MAXHOSTNAME 80
 #define BUFSIZE 1024
+#define PORT 3820
 
 char buf[BUFSIZE];
 char rbuf[BUFSIZE];
@@ -21,6 +22,25 @@ void cleanup(char *buf);
 
 int rc, cc;
 int   sd;
+
+static void sig_handler(int signo) {
+    char *ctl_msg;
+  switch(signo){
+  case SIGINT:
+  //printf("Sending SIGINT to group:%d\n",chid1);
+    strcpy(ctl_msg, "CTL c");
+    printf("caught SIGINT\n# ");
+    send(sd, ctl_msg, strlen(ctl_msg), 0);
+    break;
+  case SIGTSTP:
+  //printf("Sending SIGTSTP to group:%d\n",chid1);
+    strcpy(ctl_msg, "CTL z");
+    printf("caught SIGTSTP\n# ");
+    send(sd, ctl_msg, strlen(ctl_msg), 0);
+  break;
+  }
+
+}
 
 int main(int argc, char **argv ) {
     int childpid;
@@ -56,7 +76,7 @@ int main(int argc, char **argv ) {
     printf("    (TCP/Server INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
 
     server.sin_family = AF_INET; 
-    server.sin_port = htons(atoi(argv[2]));
+    server.sin_port = htons(PORT);
     sd = socket (AF_INET,SOCK_STREAM,0); 
 
     if (sd<0) {
@@ -84,6 +104,12 @@ int main(int argc, char **argv ) {
 	printf("(Name is : %s)\n", hp->h_name);
     printf("# ");
     fflush(stdout);
+    if (signal(SIGINT, sig_handler) == SIG_ERR) {
+        printf("Error processing signal");
+    }
+    if (signal(SIGTSTP, sig_handler) == SIG_ERR) {
+        printf("Error processing signal");
+    }
     childpid = fork();
     if (childpid == 0) {
 	GetUserInput();
@@ -121,6 +147,12 @@ void GetUserInput()
 	//printf("\nEnter command:\n");
 	cleanup(buf);
 	rc=read(0,buf, sizeof(buf));
+    if (buf == NULL || strcmp(buf, "q\n")==0) {
+    //printf("Exiting shell...");
+        close(sd);
+    kill(getppid(), 9);
+    exit(0);
+    }
 	if (rc == 0) break;
 	if (send(sd, buf, rc, 0) <0 )
 	    perror("sending stream message");
